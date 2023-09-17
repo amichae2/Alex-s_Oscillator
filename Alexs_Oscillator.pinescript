@@ -1,0 +1,153 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © amichae4
+//@version=5
+strategy("Alex's Oscillator", process_orders_on_close = true)
+
+//WILLIAMS VIX FIX
+pd = input(22, title="LookBack Period Standard Deviation High", group = "WVF")
+
+wvf = (((ta.highest(close, pd)-low)/(ta.highest(close, pd)))*100)
+wvf_pc = ((wvf - wvf[1]) / wvf[1])
+
+
+//CHANDE MOMENTUM OSCILLATOR
+chande_length = input.int(9, title = "Chande Length", minval=1, group = "Chande Momentum Index")
+src = input(close, "Source")
+momm = ta.change(src)
+f1(m) => m >= 0.0 ? m : 0.0
+f2(m) => m >= 0.0 ? 0.0 : -m
+m1 = f1(momm)
+m2 = f2(momm)
+sm1 = math.sum(m1, chande_length)
+sm2 = math.sum(m2, chande_length)
+percent(nom, div) => 100 * nom / div
+chandeMO = percent(sm1-sm2, sm1+sm2)
+chandeMO_mod = chandeMO < 0 ? chandeMO - 1 : chandeMO + 1
+chandeMO_mod := chandeMO == 0 ? 0 : chandeMO_mod
+
+
+//BETA
+beta_length = input.int(defval = 22, title = "Beta Length", group = "Beta")
+interval_adjust = input.timeframe(defval = 'D', title = "Beta Interval", group = "Beta")
+
+SPY_series = request.security('SPY', interval_adjust, close)
+cur_series = request.security(syminfo.tickerid, interval_adjust, close)
+
+SPY_pc = (((SPY_series - SPY_series[1]) / SPY_series) * 100)
+cur_pc = (((cur_series - cur_series[1]) / cur_series) * 100)
+
+SPY_sma = ta.sma(SPY_pc, beta_length)
+cur_sma = ta.sma(cur_pc, beta_length)
+
+SPY_dif = SPY_pc - SPY_sma
+cur_dif = cur_pc - cur_sma
+
+SPY_pow = SPY_dif * SPY_dif
+SPY_sum = math.sum(SPY_pow, beta_length)
+SPY_var = SPY_sum / (beta_length - 1)
+
+co_mul = cur_dif * SPY_dif
+co_sum = math.sum(co_mul, beta_length)
+co = co_sum / (beta_length - 1)
+
+betas = math.abs(co / SPY_var)
+
+
+//LINEAR REGRESSION
+mtf_val = input.timeframe('', 'Resolution', inline="config", group="Linear Regression")
+source = input.source(close, inline="config", group="Linear Regression")
+length = input.int(35, minval=1, inline="config1", group="Linear Regression")
+offset = input.int(0, minval=0, inline="config2", group="Linear Regression")
+smoothing = input.int(1, minval=1, inline="config2", group="Linear Regression")
+
+data(x) =>
+    ta.sma(request.security(syminfo.tickerid, mtf_val != '' ? mtf_val : timeframe.period, x), smoothing)
+
+linreg = data(ta.linreg(source, length, offset))
+linreg_bool = linreg < linreg[1] ? -1.0 : 1.0
+
+
+//STOCHASTIC MOMENTUM INDEX
+lengthK   = input.int(10, "%K Length",  minval = 1, maxval = 15000, group = "SMI")
+lengthD   = input.int(3,  "%D Length",  minval = 1, maxval = 4999, group = "SMI")
+lengthEMA = input.int(3,  "EMA Length", minval = 1, maxval = 4999, group = "SMI")
+
+emaEma(source, length) => ta.ema(ta.ema(source, length), length)
+
+highestHigh = ta.highest(lengthK)
+lowestLow =   ta.lowest(lengthK)
+highestLowestRange = highestHigh - lowestLow
+relativeRange = close - (highestHigh + lowestLow) / 2
+smi = 200 * (emaEma(relativeRange, lengthD) / emaEma(highestLowestRange, lengthD))
+smi_ema = ta.ema(smi, lengthEMA)
+
+smi_bs = smi >= 40 and smi_ema > smi ? (smi + 1) : 0
+smi_bs := smi <= -40 and smi_ema < smi ? (smi - 1) : smi_bs
+
+
+//SUPPORT AND RESISTANCE
+average = input(title="MA Type", defval="EMA", group = "Support and Resistance")
+len = input.int(130, minval=1, title="Length", group = "Support and Resistance")
+
+out = if average == "EMA" 
+    ta.ema(close,len)
+else
+    ta.sma(close,len)
+slp = math.abs(ta.change(out))
+
+
+//ALEXS OSCILLATOR
+trade = input.bool(defval = false, title = "Simulate Trading", group = "Alex's Oscillator")
+include_shorting = input.bool(defval = false, title = "Include Shorting", group = "Alex's Oscillator")
+buy_num = input.float(defval = 0, title = "Buy Threshold (maybe should be negative)", group = "Alex's Oscillator")
+sell_num = input.float(defval = 0, title = "Sell Threshold (probably should be negative)", group = "Alex's Oscillator")
+
+Alexs_Oscillator = betas * linreg_bool
+
+if Alexs_Oscillator < 0 and wvf_pc > 0
+    Alexs_Oscillator := Alexs_Oscillator * (wvf_pc + 1)
+else if Alexs_Oscillator < 0 and wvf_pc < 0
+    Alexs_Oscillator := Alexs_Oscillator / math.abs(wvf_pc - 1)
+else if Alexs_Oscillator > 0 and wvf_pc < 0
+    Alexs_Oscillator := Alexs_Oscillator * math.abs(wvf_pc - 1)
+else if Alexs_Oscillator > 0 and wvf_pc > 0
+    Alexs_Oscillator := Alexs_Oscillator / (wvf_pc + 1)
+
+if Alexs_Oscillator < 0 and chandeMO_mod > 0
+    Alexs_Oscillator := Alexs_Oscillator / chandeMO_mod
+else if Alexs_Oscillator < 0 and chandeMO_mod < 0
+    Alexs_Oscillator := Alexs_Oscillator * math.abs(chandeMO_mod)
+else if Alexs_Oscillator > 0 and chandeMO_mod > 0
+    Alexs_Oscillator := Alexs_Oscillator * chandeMO_mod
+else if Alexs_Oscillator > 0 and chandeMO_mod < 0
+    Alexs_Oscillator := Alexs_Oscillator / math.abs(chandeMO_mod)
+
+if Alexs_Oscillator > 0 and smi_bs > 0
+    Alexs_Oscillator := Alexs_Oscillator / smi_bs
+else if Alexs_Oscillator > 0 and smi_bs < 0
+    Alexs_Oscillator := Alexs_Oscillator * math.abs(smi_bs)
+else if Alexs_Oscillator < 0 and smi_bs > 0
+    Alexs_Oscillator := Alexs_Oscillator * smi_bs
+else if Alexs_Oscillator < 0 and smi_bs < 0
+    Alexs_Oscillator := Alexs_Oscillator / math.abs(smi_bs)
+
+Alexs_Oscillator := Alexs_Oscillator * slp
+
+col = Alexs_Oscillator > 0 ? color.lime : color.red
+col := Alexs_Oscillator == 0 and Alexs_Oscillator[1] < 0 ? color.red : col
+col := Alexs_Oscillator == 0 and Alexs_Oscillator[1] > 0 ? color.green : col
+
+plot(Alexs_Oscillator, color = col, style = plot.style_histogram)
+
+if include_shorting == true and trade == true
+    if Alexs_Oscillator > buy_num
+        strategy.entry('buy', strategy.long)
+    if Alexs_Oscillator < sell_num
+        strategy.entry('sell', strategy.short)
+else if include_shorting == false and trade == true
+    if Alexs_Oscillator > buy_num
+        strategy.entry('buy', strategy.long)
+    if Alexs_Oscillator < sell_num
+        strategy.close_all()
+
+
