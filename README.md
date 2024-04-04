@@ -1,0 +1,1 @@
+This is my own personal oscillator for doing technical analysis on TradingView. It combines the Williams VIX Fix, Chande Momentum Oscillator, Beta, Linear Regression, Stochastic Momentum Index,and a simple support and resistance calculation into one number to tell the user if the stock is a buy or sell.
